@@ -81,6 +81,120 @@ The output result:
 0.484  [bench_example] !!!BENCH TEST ALL DONE!!!
 ```
 
+#Synopsis-Http
+### http server config
+```
+    server {
+        listen 100;
+        location / { 
+            content_by_lua '
+                local t = {a3=99, b4=22, f="20", b0="bb"}
+                local cjson = require("cjson")
+                ngx.say(cjson.encode(t));
+            ';  
+        }   
+        location = /test {
+            content_by_lua '
+                ngx.say([[hello world\n\nhello lxj]])
+            ';  
+        }   
+        location = /post {
+            content_by_lua '
+                ngx.req.read_body()
+                local body = ngx.req.get_body_data()
+                ngx.say(ngx.md5(body))
+            ';  
+        }   
+    }   
+```
+### Http Test
+```
+local cjson = require("cjson")
+local ht = require "resty.http_test"
+local tb    = require "resty.iresty_test"
+
+local blocks = [[
+=== Test Get 
+--- request
+GET /get_json
+--- more_headers
+Host: test.com
+--- error_code
+200
+--- response_body json_fmt
+{"a3":99, 
+"b4":22, 
+"f":"20", 
+"b0": "bb"}
+--- response_body_filter
+json_fmt
+
+
+=== Test Hello
+--- request
+GET /test
+--- more_headers
+Host: test.com
+--- error_code
+200
+--- response_body
+hello world
+
+hello lxj
+
+=== Test Post&eval
+--- request eval
+local req_line = "POST /post"
+local datas = {}
+for i =1, 10 do 
+	table.insert(datas, "line:" .. i)
+end
+return req_line .. "\n" .. table.concat(datas, "\n")
+--- more_headers
+Host: test.com
+--- error_code eval
+return 2000/10
+--- response_body eval ngx.md5
+local datas = {}
+for i =1, 10 do 
+	table.insert(datas, "line:" .. i)
+end
+return table.concat(datas, "\n")
+--- response_body_filter
+trim
+]]
+
+function json_fmt(s)
+	local jso = cjson.decode(s)
+	if jso then 
+		local keys = {}
+		for k, _ in pairs(jso) do 
+			table.insert(keys, k)
+		end
+		local lines = {}
+		for _, k in ipairs(keys) do 
+			table.insert(lines, k .. ":" .. jso[k])
+		end
+		return table.concat(lines, '\n')
+	else
+		return s 
+	end
+end
+
+-- units test
+local test = ht.new({unit_name="test-base", blocks = blocks, server="http://127.0.0.1:100"})
+test:run()
+```
+
+### The output
+```
+0.000  [test-base] unit test start 
+0.045    |--[Test Get] PASS 
+0.045    |--[Test Hello] PASS 
+0.045    |--[Test Post&eval] PASS 
+0.045  [test-base] unit test complete 
+```
+
 #Author
 Yuansheng Wang "membphis" (王院生) membphis@gmail.com, 360 Inc.
 

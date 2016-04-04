@@ -15,6 +15,8 @@ function _M.new(opts)
     local write_log = (nil == opts.write_log) and true or write_log
     return setmetatable({start_time=ngx.now(), unit_name = unit_name, 
                           write_log = write_log, _test_inits = opts.test_inits,
+                          blocks = opts.blocks,
+                          server = opts.server,
                           processing=nil, count = 0,
                           count_fail=0, count_succ=0}, mt)
 end
@@ -51,7 +53,7 @@ function _M._log_standard_head( self )
     if nil == self.processing then
       fun_format = string.format("[%s] ", self.unit_name)
     else
-      fun_format = string.format("  \\_[%s] ", self.processing)
+      fun_format = string.format("  |--[%s] ", self.processing)
     end
 
     self:_log("default", string.format("%0.3f", ngx.now()-self.start_time), " ")
@@ -245,6 +247,6 @@ end
 function my_clean(  )
     running = false
 end
-ngx.on_abort(my_clean)
+local ok, err = pcall(ngx.on_abort,my_clean)
 
 return _M
