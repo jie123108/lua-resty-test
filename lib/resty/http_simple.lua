@@ -375,6 +375,10 @@ local function http_req(method, uri, body, myheaders, timeout)
     return res, err, req_debug
 end
 
+function _M.http_head(uri, myheaders, timeout)
+    return http_req("HEAD", uri, nil, myheaders, timeout)
+end
+
 function _M.http_get(uri, myheaders, timeout)
     return http_req("GET", uri, nil, myheaders, timeout)
 end

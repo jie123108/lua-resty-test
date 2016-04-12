@@ -2,6 +2,8 @@ local tb    = require "resty.iresty_test"
 local http = require("resty.http_simple")
 local cjson = require("cjson")
 
+tb.save_data = {}
+
 function _G.trim (s)
     return (string.gsub(s, "^%s*(.-)%s*$", "%1"))
 end
@@ -12,6 +14,10 @@ function _G.eval(str)
 		error(err)
 	end
 	return code()
+end
+
+function _G.get_save_data(section_name)
+	return tb.save_data[section_name]
 end
 
 local function split_simple(s, delimiter)
@@ -126,13 +132,18 @@ local function response_body_filter_parse(raw_args, current_section)
 	return functions
 end
 
+local function response_body_save_parse(raw_args, current_section)
+	return true
+end
+
 -- TODO: timeout指令支持。
 local directives = {
 	request = {parse=request_parse},
 	more_headers = {parse=more_headers_parse},
 	error_code = {parse=error_code_parse},
 	response_body = {parse=response_body_parse},
-	response_body_filter = {parse=response_body_filter_parse}
+	response_body_filter = {parse=response_body_filter_parse},
+	response_body_save = {parse=response_body_save_parse},
 }
 
 local function args_proc(current_section)
@@ -231,12 +242,6 @@ local function section_parse(block)
 	end
 	return sections
 end
--- TODO: check
-local function section_check()
-	-- request check, args, method, url
-
-	-- error_code check.
-end
 
 local function short_str(str, len)
 	if str == nil then 
@@ -249,7 +254,7 @@ local function short_str(str, len)
 	end
 end
 
-local function response_check(req_params,  res)
+local function response_check(testname, req_params,  res)
 	-- Check Http Code
 	local expected_code = 200
 	if req_params.error_code and req_params.error_code.args then 
@@ -264,6 +269,10 @@ local function response_check(req_params,  res)
 		expected_body = req_params.response_body.args
 	end
 	local rsp_body = res.body
+
+	if req_params.response_body_save and req_params.response_body_save.args then
+		tb.save_data[testname] = rsp_body
+	end
 	if rsp_body and req_params.response_body_filter and req_params.response_body_filter.args then 
 		for i, filter in ipairs(req_params.response_body_filter.args) do 
 			if rsp_body then 
@@ -280,8 +289,24 @@ local function response_check(req_params,  res)
 	return true
 end
 
-local function http_test(block, server)
+
+-- TODO: check
+local function section_check(section)
+	-- request check, args, method, url
+	if section.request == nil then 
+		error("'--- request' missing!")
+	end
+	if section.error_code == nil and section.response_body == nil then 
+		error("'--- error_code' or '--- response_body' missing!")
+	end
+	-- error_code check.
+end
+
+
+local function http_test(testname, block, server)
 	local req_params = section_parse(block)
+	section_check(req_params)
+
 	local request = req_params.request
 	local method = request.args.method
 	local uri = nil
@@ -290,10 +315,14 @@ local function http_test(block, server)
 	else
 		uri = server .. request.args.uri
 	end
+
+	local more_headers = req_params.more_headers
 	local myheaders = http.new_headers()
-	local timeout = req_params.args or 1000*10
-	for key, value in pairs(request.args) do 
-		myheaders[key] = value
+	-- local timeout = req_params.args or 1000*10
+	if more_headers then 
+		for key, value in pairs(more_headers.args) do 
+			myheaders[key] = value
+		end
 	end
 
 	local res, err, debug_sql
@@ -308,7 +337,7 @@ local function http_test(block, server)
 		error("request to '" .. uri .. "' failed! err:" .. tostring(err))
 	end
 
-	return response_check(req_params, res)
+	return response_check(testname, req_params, res)
 end
 
 function tb:init()
@@ -318,10 +347,10 @@ function tb:init()
 	for _, testcase in ipairs(testcases) do 
 		local testname = testcase.section_name
 		local httptest = testcase.content
-		-- ngx.log(ngx.ERR, " testname:", testname, ">>>", #httptest)
+		
 		table.insert(test_inits, testname)
 		self[testname] =  function()
-			http_test(httptest, self.server)
+			http_test(testname, httptest, self.server)
 		end
 	end
 	self._test_inits = test_inits
