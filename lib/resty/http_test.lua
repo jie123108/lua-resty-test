@@ -282,6 +282,8 @@ local function response_check(testname, req_params,  res)
 	end
 	if rsp_body ~= expected_body then 
 		-- TODO: 更准确定位差异点。
+		-- ngx.log(ngx.ERR, "expected response_body[[" .. expected_body .. "]]")
+		-- ngx.log(ngx.ERR, "             but got  [[" .. rsp_body .. "]]")
 		error("expected response_body [" .. short_str(expected_body,1024) 
 				.. "], but got [" .. short_str(rsp_body, 1024) .. "]")
 	end

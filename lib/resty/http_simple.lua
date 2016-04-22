@@ -323,10 +323,11 @@ function _M.headerstr(headers)
     return table.concat(lines, " ")
 end
 
-local function http_req(method, uri, body, myheaders, timeout)
-    local uri, host = _M.get_resolver_url(uri)
+local function http_req(method, url, body, myheaders, timeout)
+    local uri, host = _M.get_resolver_url(url)
     if uri == nil then
-        return nil, host
+        ngx.log(ngx.ERR, "resolver [", url, "] failed! ")
+        return nil, host, url
     end
 
     if myheaders == nil then myheaders = _M.new_headers() end
