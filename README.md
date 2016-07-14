@@ -15,7 +15,7 @@ Note that at least ngx_lua 0.5.14 or ngx_openresty 1.2.1.14 is required.
 ```
  # you do not need the following line if you are using
     # the ngx_openresty bundle:
-    lua_package_path "/path/to/lua-resty-redis/lib/?.lua;;";
+    lua_package_path "/path/to/lua-resty-test/lib/?.lua;;";
 
     # A lua_shared_dict named cache_ngx is required by test:bench_run
     lua_shared_dict cache_ngx 100k;
@@ -82,7 +82,7 @@ The output result:
 ```
 
 #Synopsis-Http
-### http server config
+### http server config (see in lua-resty-test/test/conf/nginx.conf)
 ```
     server {
         listen 100;
@@ -107,7 +107,8 @@ The output result:
         }   
     }   
 ```
-### Http Test
+
+### Http Test(see in lua-testy-test/lib/simple_test.lua)
 ```
 local cjson = require("cjson")
 local ht = require "resty.http_test"
@@ -186,7 +187,7 @@ local test = ht.new({unit_name="test-base", blocks = blocks, server="http://127.
 test:run()
 ```
 
-### The output
+### The output (Run: path/to/resty -I /path/to/lua-resty-test/lib simple_test.lua)
 ```
 0.000  [test-base] unit test start 
 0.045    |--[Test Get] PASS 

@@ -1,5 +1,5 @@
 local tb    = require "resty.iresty_test"
-local http = require("resty.http_simple")
+local http = require("resty.http_client")
 local cjson = require("cjson")
 
 tb.save_data = {}
