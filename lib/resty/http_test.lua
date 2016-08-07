@@ -5,6 +5,9 @@ local cjson = require("cjson")
 tb.save_data = {}
 
 function _G.trim (s)
+	if s == nil then 
+		return nil 
+	end
     return (string.gsub(s, "^%s*(.-)%s*$", "%1"))
 end
 
@@ -56,7 +59,7 @@ local function request_parse(raw_args, current_section)
 	local req_line = raw_args[1]
 	local arr = split(req_line, ' ')
 	if #arr ~= 2 then 
-		error("invalid request line: " .. req_line)
+		error("invalid request line: " .. req_line .. " arr len(" .. tostring(#arr) .. ")")
 	end
 	local method = arr[1]
 	if methods[method] == nil then 
@@ -75,14 +78,23 @@ end
 
 local function more_headers_parse(raw_args, current_section)
 	local headers = {}
-	for i, line in ipairs(raw_args) do 
-		local arr = split(line, ':')
-		if #arr ~= 2 then 
-			assert("invalid header:" .. line)
+	if current_section.funcs then 
+		local args = table.concat(raw_args)
+		if args then 
+			for i, func in ipairs(current_section.funcs) do  
+				args = func(args)
+			end
 		end
-		headers[arr[1]]=trim(arr[2])
+		headers = args
+	else
+		for i, line in ipairs(raw_args) do 
+			local arr = split(line, ':')
+			if #arr ~= 2 then 
+				assert("invalid header:" .. line)
+			end
+			headers[arr[1]]=trim(arr[2])
+		end
 	end
-	
 	return headers
 end
 
@@ -133,6 +145,7 @@ local function response_body_filter_parse(raw_args, current_section)
 end
 
 local function response_body_save_parse(raw_args, current_section)
+	-- ngx.log(ngx.ERR, "------------------------### --------------")
 	return true
 end
 
@@ -254,6 +267,31 @@ local function short_str(str, len)
 	end
 end
 
+local CODE_PATTERN = "`[^`]*`"
+
+-- 执行，未替换字符串中的`code`部分的内容。
+local function dynamic_execute(str)
+	if str == nil then 
+		return str 
+	end
+
+    local execute_and_replace = function(m)
+        local code_str = string.sub(m[0], 2, #m[0]-1)
+        local code, err = loadstring("return " .. code_str)
+		if code == nil then
+			error(err)
+		end
+		local value = code()
+		if value == nil then 
+			ngx.log(ngx.WARN, "[[ code `", code_str,"` not return]]")
+		end
+		return value or ''
+    end
+
+    local newstr, n, err = ngx.re.gsub(str, CODE_PATTERN, execute_and_replace, "jos")
+    return newstr
+end
+
 local function response_check(testname, req_params,  res)
 	-- Check Http Code
 	local expected_code = 200
@@ -266,11 +304,12 @@ local function response_check(testname, req_params,  res)
 
 	local expected_body = ''
 	if req_params.response_body and req_params.response_body.args then 
+		req_params.response_body.args = dynamic_execute(req_params.response_body.args)
 		expected_body = req_params.response_body.args
 	end
 	local rsp_body = res.body
 
-	if req_params.response_body_save and req_params.response_body_save.args then
+	if req_params.response_body_save then
 		tb.save_data[testname] = rsp_body
 	end
 	if rsp_body and req_params.response_body_filter and req_params.response_body_filter.args then 
@@ -291,7 +330,6 @@ local function response_check(testname, req_params,  res)
 	return true
 end
 
-
 -- TODO: check
 local function section_check(section)
 	-- request check, args, method, url
@@ -304,7 +342,8 @@ local function section_check(section)
 	-- error_code check.
 end
 
-
+-- 支持变量内动态执行的包括：
+-- request:URL, request:POST-BODY, more_headers, response_body
 local function http_test(testname, block, server)
 	local req_params = section_parse(block)
 	section_check(req_params)
@@ -312,6 +351,9 @@ local function http_test(testname, block, server)
 	local request = req_params.request
 	local method = request.args.method
 	local uri = nil
+	request.args.uri = dynamic_execute(request.args.uri)
+	request.args.body = dynamic_execute(request.args.body)
+
 	if startswith(request.args.uri, "http://") then 
 		uri = request.args.uri
 	else
@@ -323,6 +365,8 @@ local function http_test(testname, block, server)
 	-- local timeout = req_params.args or 1000*10
 	if more_headers then 
 		for key, value in pairs(more_headers.args) do 
+			value = dynamic_execute(value)
+			more_headers.args[key] = value 
 			myheaders[key] = value
 		end
 	end

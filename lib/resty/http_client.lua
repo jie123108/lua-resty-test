@@ -402,11 +402,14 @@ function _M.headerstr(headers)
     return table.concat(lines, " ")
 end
 
+-- timeout in ms
 local function http_req(method, uri, body, myheaders, timeout)
-    local uri, host = _M.get_resolver_url(uri)
+    local uri_orig = uri
+    local uri, host = _M.get_resolver_url(uri_orig)
     if uri == nil then
-	ngx.log(ngx.ERR, "resolver [", uri, "] failed! ")
-        return nil, host
+	   ngx.log(ngx.ERR, "resolver [", uri_orig, "] failed! ")
+       local res = {status=500, headers={}, body="resolver '" .. tostring(uri_orig) .. "' failed!"}
+       return res, host
     end
 
     if myheaders == nil then myheaders = _M.new_headers() end
@@ -423,7 +426,7 @@ local function http_req(method, uri, body, myheaders, timeout)
     if method == "PUT" or method == "POST" then
         local debug_body = nil
         local content_type = myheaders["Content-Type"]
-        if content_type == nil or _M.startswith(content_type, "text") or _M.endswith(content_type, "json") then 
+        if content_type == nil or _M.startswith(content_type, "text") or _M.endswith(content_type, "json") or _M.endswith(content_type, "application/x-www-form-urlencoded;charset=utf-8") then 
             if string.len(body) < 1024 then
                 debug_body = body
             else
@@ -447,11 +450,16 @@ local function http_req(method, uri, body, myheaders, timeout)
     local cost = ngx.now()-begin
     if not res then
         ngx.log(ngx.ERR, "FAIL REQUEST [ ",req_debug, " ] err:", err, ", cost:", cost)
+        res = {status=500, headers={}, body="request failed! err:" .. tostring(err)}
     elseif res.status >= 400 then
         ngx.log(ngx.ERR, "FAIL REQUEST [ ",req_debug, " ] status:", res.status, ", const:", cost)
     else 
         ngx.log(ngx.INFO, "REQUEST [ ",req_debug, " ] status:", res.status, ", const:", cost)
     end
+    if res.status ~= 200 and err == nil then 
+        err = res.body or "http-error:" .. tostring(res.status)
+    end
+    
     return res, err, req_debug
 end
 

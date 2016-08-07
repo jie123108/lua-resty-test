@@ -82,118 +82,223 @@ The output result:
 ```
 
 #Synopsis-Http
-### http server config (see in lua-resty-test/test/conf/nginx.conf)
-```
+### http server config for test (see in lua-resty-test/test/conf/nginx.conf)
+```nginx
+    init_worker_by_lua '
+        cjson = require("cjson")
+        -- 临时存储注册用户信息，登录信息等。(只有在worker_processes配置为1时，才能保证运行正常)
+        cache = {}
+    ';
+    
     server {
         listen 100;
-        location / { 
-            content_by_lua '
-                local t = {a3=99, b4=22, f="20", b0="bb"}
-                local cjson = require("cjson")
-                ngx.say(cjson.encode(t));
-            ';  
-        }   
-        location = /test {
-            content_by_lua '
-                ngx.say([[hello world\n\nhello lxj]])
-            ';  
-        }   
-        location = /post {
+        server_name test.com;
+        location = /account/sms/send { 
+            # request body: {tel: "电话号码"}
             content_by_lua '
                 ngx.req.read_body()
-                local body = ngx.req.get_body_data()
-                ngx.say(ngx.md5(body))
+                local body = ngx.req.get_body_data() 
+                local jso = cjson.decode(body)
+                -- TODO: 发送短信
+                local code = "1984"
+                cache["cd:" .. tostring(code)] = jso.tel
+                -- 返回Code，用于单元测试。
+                local t = {ok=true, data={code=code}}
+                ngx.say(cjson.encode(t));
+            ';  
+        }
+
+        location = /account/reg {
+            # request body: {code: "验证吗", tel: "电话号码"，username: "用户名"}
+            content_by_lua '
+                -- 注册帐号
+                ngx.req.read_body()
+                local body = ngx.req.get_body_data() 
+                local jso = cjson.decode(body)
+                local key = "cd:" .. tostring(jso.code)
+                local tel = cache[key]
+                if tel == nil or tel ~= jso.tel then 
+                    ngx.say(cjson.encode({ok=false, reason="ERR_CODE_INVALID"}))
+                    ngx.exit(0)
+                end
+                local user_id=100
+                local token="Tk-for-Login"
+                local key = "tk:" .. token
+                cache[key] = cjson.encode({user_id=user_id, username=jso.username})
+                ngx.say(cjson.encode({ok=true, data={token=token, user_id=user_id}}))                
+            ';  
+        }   
+        location = /account/user_info/get {
+            # token需要通过请求头(X-Token)传递。
+            content_by_lua '
+                local headers = ngx.req.get_headers()
+                local token = headers["X-Token"]
+                if token == nil or cache["tk:" .. token] == nil then 
+                    ngx.status = 401
+                    ngx.say(cjson.encode({ok=false, reason="ERR_TOKEN_INVALID"}))
+                    ngx.exit(0)
+                end
+                local key = "tk:" .. token
+                local user_info = cjson.decode(cache[key])
+
+                ngx.say(cjson.encode({ok=true, data=user_info}))
             ';  
         }   
     }   
 ```
 
-### Http Test(see in lua-testy-test/lib/simple_test.lua)
-```
+### Http Test(see in lua-testy-test/test/simple_test.lua)
+```lua
 local cjson = require("cjson")
 local ht = require "resty.http_test"
 local tb    = require "resty.iresty_test"
 
+_G.test_tel = "10022224444"
+function username()
+	return "jie123108"
+end
+local function get_save_data_as_json(name)
+	local save_data = get_save_data(name)
+	return cjson.decode(save_data or '{}')
+end
+function get_sms_code()
+	local jso = get_save_data_as_json("Test SMS Send")
+	return tostring(jso.data.code)
+end
+
+function get_token()
+	local jso = get_save_data_as_json("Test Reg OK")
+	return tostring(jso.data.token)
+end
+
+function get_user_id()
+	local jso = get_save_data_as_json("Test Reg OK")
+	return tostring(jso.data.user_id)
+end
+
 local blocks = [[
-=== Test Get 
+=== Test SMS Send
 --- request
-GET /get_json
+POST /account/sms/send
+{"tel": "`test_tel`"}
 --- more_headers
 Host: test.com
 --- error_code
 200
 --- response_body json_fmt
-{"a3":99, 
-"b4":22, 
-"f":"20", 
-"b0": "bb"}
+{"data":{"code":"###"}, "ok": true}
+--- response_body_filter
+json_fmt
+--- response_body_save
+
+=== Test Reg Code Invalid
+--- request
+POST /account/reg
+{"code": "0000", "tel": "`test_tel`","username": "`username()`"}
+--- error_code
+200
+--- response_body json_fmt
+{"reason": "ERR_CODE_INVALID", "ok": false}
 --- response_body_filter
 json_fmt
 
-
-=== Test Hello
+=== Test Reg OK
 --- request
-GET /test
---- more_headers
-Host: test.com
+POST /account/reg
+{"code": "`get_sms_code()`", "tel": "`test_tel`","username": "`username()`"}
 --- error_code
 200
---- response_body
-hello world
-
-hello lxj
-
-=== Test Post&eval
---- request eval
-local req_line = "POST /post"
-local datas = {}
-for i =1, 10 do 
-	table.insert(datas, "line:" .. i)
-end
-return req_line .. "\n" .. table.concat(datas, "\n")
---- more_headers
-Host: test.com
---- error_code eval
-return 2000/10
---- response_body eval ngx.md5
-local datas = {}
-for i =1, 10 do 
-	table.insert(datas, "line:" .. i)
-end
-return table.concat(datas, "\n")
+--- response_body json_fmt
+{"data": {"token": "###", "user_id": "###"}, "ok": true}
 --- response_body_filter
-trim
+json_fmt
+--- response_body_save
+
+=== Test Userinfo Get Token Invalid
+--- request
+GET /account/user_info/get
+--- more_headers
+X-Token: Invalid-Token
+--- error_code
+401
+--- response_body json_fmt
+{"reason": "ERR_TOKEN_INVALID", "ok": false}
+--- response_body_filter
+json_fmt
+
+=== Test Userinfo Get OK
+--- request
+GET /account/user_info/get
+--- more_headers
+X-Token: `get_token()`
+--- error_code
+200
+--- response_body json_fmt_not_replace
+{"ok": true, "data": {"user_id": "`get_user_id()`", "username": "`username()`"}}
+--- response_body_filter
+json_fmt_not_replace
+
+
 ]]
 
+local function table_format(jso, replace_fields)
+	local keys = {}	
+	for k, _ in pairs(jso) do 
+		table.insert(keys, k)
+	end
+	table.sort(keys)
+	local lines = {}
+	for _, k in ipairs(keys) do 
+		local value = jso[k]
+		if type(value) == 'table' then 
+			value = table_format(value, replace_fields)
+		end
+		if replace_fields and replace_fields[k] then
+			value = '###'
+		end
+		table.insert(lines, k .. ":" .. tostring(value))
+	end
+	return table.concat(lines, '\n')
+end
+
 function json_fmt(s)
-	local jso = cjson.decode(s)
+	if s == nil or s == '' then 
+		return ''
+	end
+	local jso  = cjson.decode(s)
+	local replace_fields = {code=true, token=true, user_id=true}
 	if jso then 
-		local keys = {}
-		for k, _ in pairs(jso) do 
-			table.insert(keys, k)
-		end
-		local lines = {}
-		for _, k in ipairs(keys) do 
-			table.insert(lines, k .. ":" .. jso[k])
-		end
-		return table.concat(lines, '\n')
+		return table_format(jso, replace_fields)
 	else
 		return s 
 	end
 end
 
+function json_fmt_not_replace(s)
+	if s == nil or s == '' then 
+		return ''
+	end
+	local jso  = cjson.decode(s)
+	if jso then 
+		return table_format(jso)
+	else
+		return s 
+	end
+end
 -- units test
 local test = ht.new({unit_name="test-base", blocks = blocks, server="http://127.0.0.1:100"})
 test:run()
 ```
 
-### The output (Run: path/to/resty -I /path/to/lua-resty-test/lib simple_test.lua)
+### The output (Run As: /path/to/resty -I /path/to/lua-resty-test/lib /path/to/lua-resty-test/test/simple_test.lua)
 ```
 0.000  [test-base] unit test start 
-0.045    |--[Test Get] PASS 
-0.045    |--[Test Hello] PASS 
-0.045    |--[Test Post&eval] PASS 
-0.045  [test-base] unit test complete 
+0.132    |--[Test SMS Send] PASS 
+0.132    |--[Test Reg Code Invalid] PASS 
+0.132    |--[Test Reg OK] PASS 
+0.132    |--[Test Userinfo Get Token Invalid] PASS 
+0.132    |--[Test Userinfo Get OK] PASS 
+0.132  [test-base] unit test complete 
 ```
 
 #Author
