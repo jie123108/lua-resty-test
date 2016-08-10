@@ -32,11 +32,68 @@ local function split_simple(s, delimiter)
 end
 
 function _G.split(s, delimiter)
+	if s == nil then 
+		return {}
+	end
     local result = {};
     for match in (s..delimiter):gmatch("(.-)"..delimiter) do
         table.insert(result, match);
     end
     return result;
+end
+
+local function xtabs(x)
+	if x == nil or x == 0 then
+		return ""
+	end
+	local t = {}
+	for i=1,x do 
+		table.insert(t, '  ')
+	end
+	return table.concat(t)
+end
+
+local function table_format(jso, level)
+	local lines = {}
+	level = level or 0
+	local keys = {}	
+	for k, _ in pairs(jso) do 
+		table.insert(keys, k)
+	end
+	table.sort(keys)
+	
+	for _, k in ipairs(keys) do 
+		local value = jso[k]
+		if type(value) == 'table' then 
+			value = "\n" .. table_format(value, level + 1)
+		end
+		table.insert(lines, xtabs(level) .. k .. ":" .. tostring(value))
+	end
+	return table.concat(lines, '\n')
+end
+
+local function json_loads(str)
+    local ok, jso = pcall(function() return cjson.decode(str) end)
+    if ok then
+        return jso
+    else
+        return nil, jso
+    end
+end
+
+function _G.json_fmt(s)
+	if s == nil or s == '' then 
+		return ''
+	end
+	local jso, err  = json_loads(s)
+	if err then 
+		ngx.log(ngx.ERR, "loads(", s, ") failed! err:", tostring(err))
+	end
+	if jso then 
+		return table_format(jso)
+	else
+		return s
+	end
 end
 
 local function startswith(str,startstr)
@@ -77,23 +134,19 @@ local function request_parse(raw_args, current_section)
 end
 
 local function more_headers_parse(raw_args, current_section)
-	local headers = {}
+	local headers = ''
 	if current_section.funcs then 
 		local args = table.concat(raw_args)
 		if args then 
 			for i, func in ipairs(current_section.funcs) do  
 				args = func(args)
+				local func_name = current_section.func_names[i]
+				assert(type(args) == 'string', "more_headers function [" .. func_name .. "] return a no string value!")
 			end
 		end
 		headers = args
 	else
-		for i, line in ipairs(raw_args) do 
-			local arr = split(line, ':')
-			if #arr ~= 2 then 
-				assert("invalid header:" .. line)
-			end
-			headers[arr[1]]=trim(arr[2])
-		end
+		headers = table.concat(raw_args, "\n")
 	end
 	return headers
 end
@@ -228,7 +281,6 @@ local function block_parse(block, block_pattern)
 			table.insert(sections, current_section)
 		end
 	end
-	-- ngx.say(cjson.encode(sections))
 	return sections
 end
 
@@ -248,6 +300,7 @@ local function section_parse(block)
 		if #arr > 1 then 
 			table.remove(arr, 1)					
 			current_section.funcs = get_func_by_name(arr)
+			current_section.func_names = arr
 		end
 		current_section.raw_args = content
 		args_proc(current_section)
@@ -292,6 +345,11 @@ local function dynamic_execute(str)
     return newstr
 end
 
+local function str_match(str, pattern)
+	local m = ngx.re.match(str, "^" .. pattern .. "$", "joi")
+ 	return m ~= nil
+end
+
 local function response_check(testname, req_params,  res)
 	-- Check Http Code
 	local expected_code = 200
@@ -319,7 +377,8 @@ local function response_check(testname, req_params,  res)
 			end
 		end
 	end
-	if rsp_body ~= expected_body then 
+	
+	if not str_match(rsp_body, expected_body) then 
 		-- TODO: 更准确定位差异点。
 		-- ngx.log(ngx.ERR, "expected response_body[[" .. expected_body .. "]]")
 		-- ngx.log(ngx.ERR, "             but got  [[" .. rsp_body .. "]]")
@@ -340,6 +399,19 @@ local function section_check(section)
 		error("'--- error_code' or '--- response_body' missing!")
 	end
 	-- error_code check.
+end
+
+local function headers_to_map(raw_headers)
+	local headers = http.new_headers()
+	local header_lines = split_simple(raw_headers, '\n')
+	for i, line in ipairs(header_lines) do 
+		local arr = split(line, ':')
+		if #arr ~= 2 then 
+			assert("invalid header:" .. line)
+		end
+		headers[ arr[1] ]=trim(arr[2])
+	end 
+	return headers
 end
 
 -- 支持变量内动态执行的包括：
@@ -364,11 +436,8 @@ local function http_test(testname, block, server)
 	local myheaders = http.new_headers()
 	-- local timeout = req_params.args or 1000*10
 	if more_headers then 
-		for key, value in pairs(more_headers.args) do 
-			value = dynamic_execute(value)
-			more_headers.args[key] = value 
-			myheaders[key] = value
-		end
+		more_headers.args = dynamic_execute(more_headers.args)
+		myheaders = headers_to_map(more_headers.args)
 	end
 
 	local res, err, debug_sql
